@@ -1,0 +1,354 @@
+import matplotlib.pyplot as plt
+import numpy as np
+import os, cv2, math
+import tensorflow as tf
+from IPython.display import display, Image, HTML
+
+TRAIN_DIR = 'C:/Users/HF/Desktop/machineLearning/cat vs dog data/train/'
+TEST_DIR = 'C:/Users/HF/Desktop/machineLearning/cat vs dog data/test/'
+IMAGE_SIZE = 150
+CHANNELS = 3
+PIXEL_DEPTH = 255.0  # 像素最大值
+TRAIN_DATA_NUM = 11492 # 狗和猫各自的训练图片数量
+VALIDATION_DATA_NUM = 1000 # 狗和猫各自的验证图片数量
+TRAIN_NUM = TRAIN_DATA_NUM * 2 # 训练集的图片数量，不包含验证集
+VALIDATION_NUM = VALIDATION_DATA_NUM * 2 # 验证集的图片数量
+TEST_NUM = 12500 # 测试集数量
+
+# 训练集 + 验证集
+train_images_all = [TRAIN_DIR + i for i in os.listdir(TRAIN_DIR)]
+train_images_dog = [i for i in train_images_all if 'dog' in i]
+train_images_cat = [i for i in train_images_all if 'cat' in i]
+train_images_filepaths = train_images_dog + train_images_cat
+train_images_labels = np.array([1] * (TRAIN_DATA_NUM + VALIDATION_DATA_NUM) \
+                               + [0] * (TRAIN_DATA_NUM + VALIDATION_DATA_NUM)) # 1表示dog，0表示cat
+# 测试集
+test_images_filepaths = [TEST_DIR + i for i in os.listdir(TEST_DIR)]
+
+def read_image(file_path):
+    img = cv2.imread(file_path, cv2.IMREAD_COLOR)
+    if img.shape[0] > img.shape[1]:
+        img_size = (IMAGE_SIZE, int(round(float(img.shape[1] / img.shape[0]) * IMAGE_SIZE)))
+    else:
+        img_size = (int(round(float(img.shape[0] / img.shape[1]) * IMAGE_SIZE)), IMAGE_SIZE)
+    
+    # OpenCV的图像size都是先水平轴再垂直轴，和一个矩阵的shape刚好相反
+    tmp_img = cv2.resize(img, (img_size[1], img_size[0]), interpolation=cv2.INTER_CUBIC)
+    ret_img = cv2.copyMakeBorder(tmp_img, 0, IMAGE_SIZE-img_size[0], 0, IMAGE_SIZE-img_size[1], cv2.BORDER_CONSTANT, 0)
+    
+    return ret_img[:,:,::-1] # 转化为rgb格式
+
+# 载入训练集 + 验证集
+train_dataset = np.ndarray((TRAIN_NUM + VALIDATION_NUM , IMAGE_SIZE, IMAGE_SIZE, CHANNELS), dtype=np.uint8)
+for i, image_path in enumerate(train_images_all):
+    train_dataset[i] = read_image(image_path)
+print("Train shape: {}".format(train_dataset.shape))
+
+# 载入测试集
+test_dataset = np.ndarray((TEST_NUM, IMAGE_SIZE, IMAGE_SIZE, CHANNELS), dtype=np.uint8)
+for i, image_path in enumerate(test_images_filepaths):
+    test_dataset[i] = read_image(image_path)
+print("Test shape: {}".format(test_dataset.shape))
+
+%matplotlib inline
+plt.imshow (train_dataset[0,:,:,:], interpolation='nearest')
+plt.figure ()
+plt.imshow (train_dataset[1,:,:,:], interpolation='nearest')
+plt.figure ()
+plt.imshow (train_dataset[2,:,:,:], interpolation='nearest')
+plt.figure ()
+plt.imshow (train_dataset[TRAIN_DATA_NUM + VALIDATION_DATA_NUM,:,:,:], interpolation='nearest')
+plt.figure ()
+plt.imshow (train_dataset[TRAIN_DATA_NUM + VALIDATION_DATA_NUM + 1,:,:,:], interpolation='nearest')
+plt.figure ()
+plt.imshow (train_dataset[TRAIN_DATA_NUM + VALIDATION_DATA_NUM + 2,:,:,:], interpolation='nearest')
+
+np.random.seed(201712)
+# 打乱训练集中的数据
+def randomize(dataset, labels):
+    permutation = np.random.permutation(labels.shape[0])
+    shuffled_dataset = dataset[permutation,:,:,:]
+    shuffled_labels = labels[permutation]
+  
+    return shuffled_dataset, shuffled_labels
+
+train_dataset_rand, train_labels_rand = randomize(train_dataset, train_images_labels)
+train = train_dataset_rand[:TRAIN_NUM,:,:,:]
+train_labels = train_labels_rand[:TRAIN_NUM]
+valid = train_dataset_rand[-VALIDATION_NUM:]
+valid_labels = train_labels_rand[-VALIDATION_NUM:]
+print('Train shape: ', train.shape, train_labels.shape)
+print('Valid shape: ', valid.shape, valid_labels.shape)
+
+#生成字符串型的属性
+def _bytes_feature(value):
+    return tf.train.Feature(bytes_list=tf.train.BytesList(value=[value]))
+
+
+# 生成整数型的属性
+def _int64_feature(value):
+    return tf.train.Feature(int64_list=tf.train.Int64List(value=[value]))
+    
+    
+# 把数据写到多个文件中
+def save_multiple_tfrecords(images, labels, filename, instances_per_file):
+    image_num = labels.shape[0]
+    file_num = math.ceil(image_num / instances_per_file) # 计算需要写的文件总数
+    
+    # 遍历每一张图片
+    write_num = instances_per_file
+    cur_file_no = -1
+    for i in range(image_num):
+        # 如果一个文件的图片达到预定的数目，则创建新的文件继续写
+        if write_num == instances_per_file:
+            write_num = 0
+            cur_file_no += 1
+            write_filename = filename + '.tfrecords-%.4d-of-%.4d' % (cur_file_no, file_num)
+            print('Writing ' + write_filename)
+            writer = tf.compat.v1.python_io.TFRecordWriter(write_filename)
+        # 写图片到文件
+        image_bytes = images[i].tostring()
+        example = tf.train.Example(
+            features=tf.train.Features(
+                feature={
+                    'label': _int64_feature(labels[i]),
+                    'image_raw': _bytes_feature(image_bytes)
+            }))
+        writer.write(example.SerializeToString())
+        write_num += 1
+              
+    writer.close()
+    print('Writing End.')
+
+
+save_multiple_tfrecords(train, train_labels, 'C:/Users/HF/Desktop/machineLearning/cat vs dog data/data/train', 1024)
+save_multiple_tfrecords(valid, valid_labels, 'C:/Users/HF/Desktop/machineLearning/cat vs dog data/data/vaild', VALIDATION_NUM)
+save_multiple_tfrecords(test_dataset, np.array([0] * TEST_NUM), 'C:/Users/HF/Desktop/machineLearning/cat vs dog data/data/test', 12500)
+# 卷积池化
+def conv2d_maxpool(x_tensor, conv_depth, conv_ksize, conv_strides, pool_ksize, pool_strides):
+    input_depth = x_tensor.shape[-1].value
+    # 卷积
+    conv_weights = tf.Variable(tf.truncated_normal([conv_ksize[0], conv_ksize[1], input_depth, conv_depth], stddev=0.05))
+    conv_bias = tf.Variable(tf.zeros(conv_depth))
+    conv = tf.nn.conv2d(x_tensor, conv_weights, strides=[1, conv_strides[0], conv_strides[1], 1], padding='SAME')
+    conv_output = tf.nn.relu(tf.nn.bias_add(conv, conv_bias))
+    # 池化
+    pool_out = tf.nn.max_pool(conv_output, ksize=[1, pool_ksize[0], pool_ksize[1], 1],\
+                             strides=[1, pool_strides[0], pool_strides[1], 1], padding='SAME')
+    
+    return pool_out
+
+
+# 展开函数，全连接层的数据depth都是1
+def flatten(x_tensor):
+    nodes = np.prod(x_tensor.shape.as_list()[1:])
+    x_reshape = tf.reshape(x_tensor, [-1, nodes])
+    
+    return x_reshape
+
+
+# 全连接
+def fully_conn(x_tensor, num_outputs):
+    height = x_tensor.shape[1].value
+    weights = tf.Variable(tf.truncated_normal([height, num_outputs], stddev=0.05))
+    bias = tf.Variable(tf.zeros(num_outputs))
+    fully_output = tf.nn.relu(tf.add(tf.matmul(x_tensor, weights), bias))
+        
+    return fully_output
+
+
+# 输出
+def output(x_tensor, num_outputs):
+    height = x_tensor.shape[1].value
+    weights = tf.Variable(tf.truncated_normal([height, num_outputs], stddev=0.05))
+    bias = tf.Variable(tf.zeros(num_outputs))
+    
+return tf.add(tf.matmul(x_tensor, weights), bias)
+
+def conv_net(x, keep_prob):
+    # 3个卷积——最大池化层
+    conv1 = conv2d_maxpool(x, conv_depth=64, conv_ksize=[2,2], conv_strides=[1,1], \
+                           pool_ksize=[2,2], pool_strides=[1,1])
+    conv2 = conv2d_maxpool(conv1, conv_depth=128, conv_ksize=[2,2], conv_strides=[2,2],\
+                          pool_ksize=[3,3], pool_strides=[2,2])
+    conv3 = conv2d_maxpool(conv2, conv_depth=256, conv_ksize=[4,4], conv_strides=[2,2],\
+                          pool_ksize=[3,3], pool_strides=[2,2])
+    # 第1个mixed层
+    mixed1_branch0 = conv2d_maxpool(conv3, conv_depth=256, conv_ksize=[1,1], conv_strides=[1,1],\
+                                   pool_ksize=[1,1], pool_strides=[1,1])
+    mixed1_branch1 = conv2d_maxpool(conv3, conv_depth=512, conv_ksize=[3,3], conv_strides=[1,1],\
+                                   pool_ksize=[2,2], pool_strides=[1,1])
+    mixed1_branch2 = conv2d_maxpool(conv3, conv_depth=512, conv_ksize=[5,5], conv_strides=[1,1],\
+                                   pool_ksize=[3,3], pool_strides=[1,1])
+    mixed1 = tf.concat([mixed1_branch0, mixed1_branch1, mixed1_branch2], 3) # depth=1280
+    
+    
+    # 2个全连接层，dropout
+    flatten_x = flatten(mixed1)
+    fully_conn1 = tf.nn.dropout(fully_conn(flatten_x, 640), keep_prob)
+    fully_conn2 = tf.nn.dropout(fully_conn(fully_conn1, 320), keep_prob)
+    
+    # 输出层
+    y = output(fully_conn2, 1)
+    
+    return y
+
+# input
+tf.compat.v1.disable_eager_execution()
+x = tf.compat.v1.placeholder(tf.float32, shape=[None, IMAGE_SIZE, IMAGE_SIZE, 3], name='x')
+y = tf.compat.v1.placeholder(tf.float32, shape=[None, 1], name='y')
+keep_prob = tf.compat.v1.placeholder(tf.float32, name='keep_prob')
+
+# model
+logits = tf.nn.sigmoid(conv_net(x, keep_prob)) # 使用sigmoid将结果转化为概率
+logits = tf.identity(logits, name='logits') # 加个名字方便持久化后载入
+
+# loss and optimizer
+loss = tf.losses.log_loss(y, logits)
+optimizer = tf.train.AdamOptimizer().minimize(loss)
+
+# Accuracy
+equal = tf.equal(tf.where(tf.greater(logits, 0.5), tf.ones_like(logits), tf.zeros_like(logits)), y)
+accuracy = tf.reduce_mean(tf.cast(equal, tf.float32), name='accuracy')
+
+def pre_process_for_train(image):
+    image_data = tf.cast(image, tf.float32)
+    # 将所有的像素值转化到[-1,1]之间
+    image_data = (image_data / PIXEL_DEPTH - 0.5) * 2
+    
+    return image_data
+
+def print_status(session, feature_batch, label_batch, loss, accuracy, end='\n'):
+    cur_loss = session.run(loss, feed_dict={x:feature_batch, y:label_batch, keep_prob:1})
+    cur_acc = session.run(accuracy, feed_dict={x:feature_batch, y:label_batch, keep_prob:1})
+    print('loss: {:>6,.4f}  acc: {:>6,.4f}'.format(cur_loss, cur_acc), end=end)
+
+# 载入验证集
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
+filename = './data/valid.tfrecords-0000-of-0001'
+filename_queue = tf.train.string_input_producer([filename]) #读入流中
+reader = tf.TFRecordReader()
+_, serialized_example = reader.read(filename_queue)  #返回文件名和文件
+valid_features = tf.parse_single_example(
+    serialized_example,
+    features={
+        'label': tf.FixedLenFeature([], tf.int64),
+        'image_raw': tf.FixedLenFeature([], tf.string)
+    })
+
+# 把字节串编码成矩阵，并根据尺寸还原图像
+image = tf.decode_raw(valid_features['image_raw'], tf.uint8)
+image = tf.reshape(image, [IMAGE_SIZE, IMAGE_SIZE, CHANNELS])
+label = valid_features['label']
+
+# 处理图像
+processed_image = pre_process_for_train(image)
+
+with tf.Session() as sess:
+    sess.run([tf.global_variables_initializer(), tf.local_variables_initializer()])
+    coord=tf.train.Coordinator()
+    threads= tf.train.start_queue_runners(coord=coord)
+   
+    valid = np.ndarray((VALIDATION_DATA_NUM*2, IMAGE_SIZE, IMAGE_SIZE, CHANNELS), dtype=np.float32)
+    valid_label = np.ndarray((VALIDATION_DATA_NUM*2, 1), dtype=np.float32)
+    for i in range(VALIDATION_DATA_NUM*2):
+        # 处理图像
+        valid[i], valid_label[i] = sess.run([processed_image, label])
+
+    coord.request_stop()
+    coord.join(threads)
+
+import h5py, math
+from keras.layers import Input, Lambda
+from keras.applications import inception_v3, resnet50, xception
+
+print(train_dataset_rand.shape, train_labels_rand.shape, test_dataset.shape) # 查看一下数据大小
+
+def write_feature_vector(MODEL, pre_process):
+    inputs = Input((IMAGE_SIZE, IMAGE_SIZE, 3))
+    if pre_process:
+        inputs = Lambda(pre_process)(inputs)
+        
+    model = MODEL(input_tensor=inputs, weights='imagenet', include_top=False, pooling='avg')
+    train_vector = model.predict(train_dataset_rand)
+    test_vector = model.predict(test_dataset)
+    
+    with h5py.File("./transfer_learning_data/vector_{}.h5".format(MODEL.__name__)) as h:
+        h.create_dataset("train", data=train_vector)
+        h.create_dataset("test", data=test_vector)
+        h.create_dataset("train_label", data=train_labels_rand)
+    print(MODEL.__name__ + " ok.")
+    
+write_feature_vector(inception_v3.InceptionV3, pre_process=inception_v3.preprocess_input)
+write_feature_vector(xception.Xception, pre_process=xception.preprocess_input)
+write_feature_vector(resnet50.ResNet50, pre_process=resnet50.preprocess_input)
+
+from sklearn.model_selection import train_test_split
+
+x_train2, x_valid, y_train2, y_valid = train_test_split(x_train, y_train, test_size=0.2, random_state=2017)
+
+# 输出层
+def output(x_tensor, num_outputs):
+    height = x_tensor.shape[1].value
+    weights = tf.Variable(tf.truncated_normal([height, num_outputs], stddev=0.05))
+    bias = tf.Variable(tf.zeros(num_outputs))
+
+    return tf.add(tf.matmul(x_tensor, weights), bias)
+
+# 直接dropout，然后一个输出层
+x = tf.placeholder(tf.float32, shape=[None, 6144], name='x')
+y = tf.placeholder(tf.float32, shape=[None, 1], name='y')
+keep_prob = tf.placeholder(tf.float32, name='keep_prob')
+
+x = tf.nn.dropout(x, keep_prob)
+logits = tf.nn.sigmoid(output(x, 1))
+logits = tf.identity(logits, name='logits')
+
+
+# loss and optimizer
+loss = tf.losses.log_loss(y, logits)
+optimizer = tf.train.AdamOptimizer().minimize(loss)
+
+
+
+epochs = 5
+batch_size = 512
+keep_probability = 0.5
+train_loss = []
+valid_loss = []
+   
+def print_status(session, feature_batch, label_batch, loss, accuracy, end='\n', saved_list=None):
+    cur_loss = session.run(loss, feed_dict={x:feature_batch, y:label_batch, keep_prob:1})
+    cur_acc = session.run(accuracy, feed_dict={x:feature_batch, y:label_batch, keep_prob:1})
+    if saved_list is not None:
+        saved_list.append(cur_loss)
+    print('loss: {:>6,.4f}  acc: {:>6,.4f} '.format(cur_loss, cur_acc), end=end)
+    
+with tf.Session() as sess:
+    sess.run(tf.global_variables_initializer())
+    
+    for epoch in range(epochs):
+        steps = math.ceil(y_train2.shape[0] / batch_size)
+        for step in range(steps):
+            offset = step * batch_size
+            batch_features = x_train2[offset:(offset + batch_size), :]
+            batch_labels = y_train2[offset:(offset + batch_size)]
+
+            sess.run(optimizer, feed_dict={x:batch_features, y:batch_labels, keep_prob:keep_probability})
+            if step % 5 == 0: # 每5步打印一次loss和acc
+                print('Epoch {:>2}, Batch {:>2}:  '.format(epoch + 1, step), end='')
+                print_status(sess, x_train2, y_train2, loss, accuracy, end='', saved_list=train_loss)
+                print_status(sess, x_valid, y_valid, loss, accuracy, saved_list=valid_loss)
+    
+    # predict
+    y_test = sess.run(logits, feed_dict={x:x_test, keep_prob:1})
+
+# 截断降低logloss
+label = np.clip(y_test, 0.005, 0.995)
+
+df = pd.DataFrame(label, columns=['label'])
+id = sorted([str(i+1) for i in range(12492)])
+df['id'] = id
+
+df.to_csv('myfile.csv', columns=['id', 'label'], index=None)
